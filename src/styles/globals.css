@@ -1,0 +1,112 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Canvas & Base Tokens */
+    /* Warm off-white #FAFAF8 -> hsl(60, 11%, 97.6%) */
+    --background: 60 11% 97.6%;
+    /* Near-black typography #171717 -> hsl(0, 0%, 9%) */
+    --foreground: 0 0% 9%;
+
+    /* Card & Surface Tokens */
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 9%;
+    --card-hover: 60 10% 99%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 9%;
+
+    /* Soft Indigo Brand Accent #7666E8 -> hsl(247, 74%, 65.5%) */
+    --primary: 247 74% 65.5%;
+    --primary-foreground: 0 0% 100%;
+    --primary-hover: 248 69% 59%;
+
+    /* Secondary / Neutral Tokens */
+    --secondary: 60 7% 95%;
+    --secondary-foreground: 0 0% 13%;
+    --secondary-hover: 60 7% 92%;
+
+    /* Muted Typography #737373 -> hsl(0, 0%, 45.1%) */
+    --muted: 60 6% 93%;
+    --muted-foreground: 0 0% 45.1%;
+
+    /* Accent & Interactive States */
+    --accent: 247 74% 96.5%;
+    --accent-foreground: 248 69% 45%;
+
+    /* Destructive Tokens #DC2626 */
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+    --destructive-hover: 0 74% 42%;
+    --destructive-muted: 0 86% 97%;
+    --destructive-border: 0 93% 89%;
+
+    /* Success Tokens #16A34A */
+    --success: 142 76% 36%;
+    --success-foreground: 0 0% 100%;
+    --success-muted: 142 76% 96.5%;
+    --success-border: 142 69% 84%;
+
+    /* Warning Tokens #D97706 */
+    --warning: 38 92% 44%;
+    --warning-foreground: 0 0% 100%;
+    --warning-muted: 48 96% 96%;
+    --warning-border: 48 96% 76%;
+
+    /* Border & Input Tokens #EAEAE6 -> hsl(60, 8%, 91%) */
+    --border: 60 8% 91%;
+    --border-subtle: 60 7% 94%;
+    --input: 60 8% 90%;
+    
+    /* Accessible Focus Ring: Brand Indigo */
+    --ring: 247 74% 65.5%;
+
+    /* Border Radii */
+    --radius: 0.5rem;
+    --radius-xl: 0.75rem;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html {
+    color-scheme: light;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased selection:bg-brand-100 selection:text-brand-900;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+
+  /* Accessible outline reset with high-visibility custom focus rings */
+  :focus-visible {
+    @apply outline-none ring-2 ring-brand-500/30 ring-offset-2 ring-offset-background;
+  }
+}
+
+/* Custom Scrollbar for sleek aesthetic */
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: hsl(var(--border));
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--muted-foreground) / 0.4);
+}
