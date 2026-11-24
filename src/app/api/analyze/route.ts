@@ -142,7 +142,13 @@ export async function POST(req: NextRequest) {
     const rawMessage = err.message || "";
     console.error("[POST /api/analyze Error]:", rawMessage);
 
-    // Differentiate transient overload / rate limits / auth issues
+    // Differentiate daily quota exhaustion vs transient overload vs per-minute rate limits vs auth issues
+    const isDailyQuota =
+      rawMessage.includes("GEMINI_DAILY_QUOTA_EXCEEDED") ||
+      rawMessage.toLowerCase().includes("per day limit exceeded") ||
+      rawMessage.toLowerCase().includes("requests per day") ||
+      rawMessage.toLowerCase().includes("generate_content_free_tier_requests");
+
     const isOverload =
       rawMessage.includes("503") ||
       rawMessage.toLowerCase().includes("overloaded") ||
@@ -160,6 +166,20 @@ export async function POST(req: NextRequest) {
       rawMessage.toLowerCase().includes("authentication failed") ||
       rawMessage.includes("401") ||
       rawMessage.includes("403");
+
+    if (isDailyQuota) {
+      return NextResponse.json(
+        {
+          error: "DAILY_QUOTA_EXCEEDED",
+          message:
+            "Google AI Studio Free Tier daily limit reached (20 requests/day per project). Your inputs have been saved.",
+          instructions:
+            "Your Google AI Studio project has hit its 20 requests/day Free Tier limit. To resolve immediately without waiting 24 hours: 1) Go to https://aistudio.google.com, 2) Click 'Get API key' and create a new key in a NEW project, 3) Update GEMINI_API_KEY in Vercel (Project Settings > Environment Variables), and 4) Redeploy.",
+          isTransient: false,
+        },
+        { status: 429, headers: JSON_HEADERS }
+      );
+    }
 
     if (isOverload) {
       return NextResponse.json(

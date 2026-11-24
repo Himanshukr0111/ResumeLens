@@ -216,7 +216,16 @@ export function UploadModal({ open, onOpenChange, onAnalysisComplete }: UploadMo
         if (payload && (payload.error || payload.message)) {
           setErrorType(payload.error || "ANALYSIS_FAILED");
 
-          if (payload.error === "GEMINI_API_KEY_MISSING") {
+          if (payload.error === "DAILY_QUOTA_EXCEEDED") {
+            setErrorMessage(
+              payload.message ||
+                "Google AI Studio Free Tier daily quota limit reached (20 requests/day on this project). Your resume and job description inputs are saved."
+            );
+            setErrorDetails(
+              payload.instructions ||
+                "To resolve immediately without waiting 24 hours: 1) Visit https://aistudio.google.com, 2) Create a new API key in a NEW project, 3) Update GEMINI_API_KEY in Vercel Project Settings > Environment Variables, and 4) Redeploy."
+            );
+          } else if (payload.error === "GEMINI_API_KEY_MISSING") {
             setErrorMessage(
               "Gemini API key is not configured in the server environment."
             );
@@ -336,11 +345,13 @@ export function UploadModal({ open, onOpenChange, onAnalysisComplete }: UploadMo
 
         {/* Configuration / Overload Error Alert */}
         {errorMessage && (
-          <Alert variant={errorType === "AI_SERVICE_OVERLOADED" ? "warning" : "destructive"} className="my-2">
+          <Alert variant={errorType === "AI_SERVICE_OVERLOADED" || errorType === "DAILY_QUOTA_EXCEEDED" ? "warning" : "destructive"} className="my-2">
             <ShieldAlert className="h-4 w-4" />
             <AlertTitle className="font-semibold flex items-center justify-between">
               <span>
-                {errorType === "AI_SERVICE_OVERLOADED"
+                {errorType === "DAILY_QUOTA_EXCEEDED"
+                  ? "Google AI Studio Daily Quota Reached (429)"
+                  : errorType === "AI_SERVICE_OVERLOADED"
                   ? "AI Service Temporarily Busy"
                   : errorType === "RATE_LIMIT_EXCEEDED"
                   ? "Rate Limit Notice"

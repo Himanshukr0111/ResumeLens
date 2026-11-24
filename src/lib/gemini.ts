@@ -51,7 +51,7 @@ function isModelNotFoundError(error: unknown): boolean {
 
 /**
  * Checks if error is a daily quota exhaustion (e.g. "per day limit exceeded", "retry in 16h")
- * where immediate retries on the same model are futile.
+ * where immediate retries on the same or other models under the same project are futile.
  */
 function isDailyQuotaExceeded(error: unknown): boolean {
   if (!error) return false;
@@ -59,6 +59,7 @@ function isDailyQuotaExceeded(error: unknown): boolean {
   return (
     msg.includes("per day limit exceeded") ||
     msg.includes("requests per day") ||
+    msg.includes("generate_content_free_tier_requests") ||
     /retry in \d+h/i.test(msg)
   );
 }
@@ -143,20 +144,18 @@ export async function analyzeWithGemini(
   const promptConfig = getPromptConfig(options?.promptVersion);
   const genAI = new GoogleGenerativeAI(apiKey);
 
-  // Model selection: support environment override, default to gemini-3.5-flash-lite
-  const preferredModel = process.env.GEMINI_MODEL || "gemini-3.5-flash-lite";
+  // Model selection: support environment override, default to gemini-3.5-flash
+  const preferredModel = process.env.GEMINI_MODEL || "gemini-3.5-flash";
 
-  // Ordered fallback chain:
-  // Starts with the preferred model, then tries other valid models
+  // Ordered fallback chain of verified supported models:
+  // Starts with the preferred model (default: gemini-3.5-flash), then falls back to gemini-3.5-flash-lite or gemini-3.8-flash.
+  // Deprecated models that return 404 (such as gemini-1.5-flash and gemini-2.0-flash) are intentionally excluded.
   const modelCandidates = Array.from(
     new Set([
       preferredModel,
-      "gemini-3.5-flash-lite",
       "gemini-3.5-flash",
+      "gemini-3.5-flash-lite",
       "gemini-3.8-flash",
-      "gemini-flash-latest",
-      "gemini-1.5-flash",
-      "gemini-2.0-flash",
     ])
   );
 
@@ -166,7 +165,7 @@ export async function analyzeWithGemini(
     options?.targetRole
   );
 
-  const MAX_RETRIES_PER_MODEL = 3;
+  const MAX_RETRIES_PER_MODEL = 2; // Up to 2 retries (3 total attempts per model)
   // Maximum execution budget for the entire analysis workflow to ensure we always
   // return a clean JSON response within Vercel's serverless function time limit (15s).
   const MAX_EXECUTION_BUDGET_MS = 12500;
@@ -240,17 +239,15 @@ export async function analyzeWithGemini(
           throw new Error(`Gemini API Authentication Failed: ${lastError.message}`);
         }
 
+        // If daily quota exhausted for this project/API key, immediate fail:
+        // Quota is project-wide (20 req/day limit), so retrying other models under the same key will also fail.
+        if (isDailyQuotaExceeded(err)) {
+          throw new Error(`GEMINI_DAILY_QUOTA_EXCEEDED: ${lastError.message}`);
+        }
+
         // If model does not exist (404), do not retry this model — move immediately to next candidate
         if (isModelNotFoundError(err)) {
           console.warn(`[Gemini API] Model ${modelName} not found (404). Skipping to next candidate.`);
-          break;
-        }
-
-        // If daily quota exhausted for this model, do not waste retries on it — move immediately to next candidate
-        if (isDailyQuotaExceeded(err)) {
-          console.warn(
-            `[Gemini API] Model ${modelName} daily quota exhausted. Skipping to next candidate.`
-          );
           break;
         }
 
@@ -263,10 +260,10 @@ export async function analyzeWithGemini(
 
         const currentElapsed = Date.now() - startTime;
         if (attempt <= MAX_RETRIES_PER_MODEL && isTransient && currentElapsed < MAX_EXECUTION_BUDGET_MS - 2000) {
-          // Fast exponential backoff with jitter: ~500ms, ~1000ms, ~1800ms
-          const baseBackoff = 500 * Math.pow(2, attempt - 1);
+          // Fast exponential backoff with jitter: ~600ms, ~1200ms
+          const baseBackoff = 600 * Math.pow(2, attempt - 1);
           const jitter = Math.floor(Math.random() * 200) + 50;
-          const waitMs = Math.min(baseBackoff + jitter, 2500);
+          const waitMs = Math.min(baseBackoff + jitter, 2000);
 
           console.warn(
             `[Gemini API] Model ${modelName} temporary error on attempt ${attempt}/${MAX_RETRIES_PER_MODEL} (${lastError.message}). Retrying in ${waitMs}ms...`
@@ -289,7 +286,7 @@ export async function analyzeWithGemini(
   if (!responseText) {
     if (hadTransientOverload) {
       throw new Error(
-        `Gemini AI service is currently overloaded (503 / high demand). Retried 3 times across fallback models, but all candidates are temporarily busy. Last error: ${lastError?.message || "Service unavailable"}`
+        `Gemini AI service is currently experiencing high demand (503). Retried with exponential backoff across fallback models, but all candidates are temporarily busy. Last error: ${lastError?.message || "Service unavailable"}`
       );
     }
     throw new Error(
