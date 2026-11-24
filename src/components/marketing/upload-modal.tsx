@@ -90,6 +90,7 @@ export function UploadModal({ open, onOpenChange, onAnalysisComplete }: UploadMo
   const [scanStep, setScanStep] = React.useState("");
   const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
   const [errorDetails, setErrorDetails] = React.useState<string | null>(null);
+  const [errorType, setErrorType] = React.useState<string | null>(null);
   const [analysisResult, setAnalysisResult] = React.useState<AnalysisResult | null>(null);
 
   const fileInputRef = React.useRef<HTMLInputElement>(null);
@@ -99,6 +100,8 @@ export function UploadModal({ open, onOpenChange, onAnalysisComplete }: UploadMo
       const file = e.target.files[0];
       setSelectedFile(file);
       setErrorMessage(null);
+      setErrorDetails(null);
+      setErrorType(null);
     }
   };
 
@@ -108,11 +111,15 @@ export function UploadModal({ open, onOpenChange, onAnalysisComplete }: UploadMo
     const file = new File([blob], "Alex_Mercer_Lead_Architect_Resume.txt", { type: "text/plain" });
     setSelectedFile(file);
     setErrorMessage(null);
+    setErrorDetails(null);
+    setErrorType(null);
   };
 
   const handleInsertSampleText = () => {
     setPastedResumeText(SAMPLE_RESUME_TEXT);
     setErrorMessage(null);
+    setErrorDetails(null);
+    setErrorType(null);
   };
 
   const handleReset = () => {
@@ -122,6 +129,7 @@ export function UploadModal({ open, onOpenChange, onAnalysisComplete }: UploadMo
     setIsScanning(false);
     setErrorMessage(null);
     setErrorDetails(null);
+    setErrorType(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
@@ -129,7 +137,13 @@ export function UploadModal({ open, onOpenChange, onAnalysisComplete }: UploadMo
     setIsScanning(true);
     setErrorMessage(null);
     setErrorDetails(null);
-    setScanStep("Preparing document for analysis...");
+    setErrorType(null);
+
+    const initialStep =
+      inputMode === "file" && selectedFile
+        ? `Extracting text from "${selectedFile.name}"...`
+        : "Sending resume text to Gemini AI...";
+    setScanStep(initialStep);
 
     try {
       let response: Response;
@@ -147,7 +161,7 @@ export function UploadModal({ open, onOpenChange, onAnalysisComplete }: UploadMo
           body: formData,
         });
       } else {
-        setScanStep("Sending resume text to analysis engine...");
+        setScanStep("Sending resume text to Gemini AI analysis engine...");
         response = await fetch("/api/analyze", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -160,11 +174,12 @@ export function UploadModal({ open, onOpenChange, onAnalysisComplete }: UploadMo
         });
       }
 
-      setScanStep("Evaluating skills, alignment, and evidence...");
+      setScanStep("Evaluating skills, alignment, and evidence with Gemini AI...");
 
       const payload = await response.json();
 
       if (!response.ok) {
+        setErrorType(payload.error || "ANALYSIS_FAILED");
         if (payload.error === "GEMINI_API_KEY_MISSING") {
           setErrorMessage(
             "GEMINI_API_KEY is not configured in the server environment. Please set GEMINI_API_KEY in your .env.local file to perform real Gemini AI analysis."
@@ -173,10 +188,21 @@ export function UploadModal({ open, onOpenChange, onAnalysisComplete }: UploadMo
             payload.instructions ||
               "Add GEMINI_API_KEY=your_key_here to .env.local in the project root, then restart the application."
           );
+        } else if (payload.error === "AI_SERVICE_OVERLOADED") {
+          setErrorMessage(
+            "Google Gemini AI is currently experiencing high demand. We attempted automatic retries and model fallbacks, but the service is temporarily busy. Your uploaded resume and job criteria are saved — please click 'Try Again' in a moment."
+          );
+          setErrorDetails(null);
+        } else if (payload.error === "RATE_LIMIT_EXCEEDED") {
+          setErrorMessage(
+            "Gemini API rate limit reached. Your inputs are preserved. Please wait a moment and click 'Try Again'."
+          );
+          setErrorDetails(null);
         } else {
           setErrorMessage(payload.message || "Failed to analyze resume.");
-          setErrorDetails(payload.error || null);
+          setErrorDetails(payload.details || null);
         }
+        // Notice: selectedFile and pastedResumeText remain completely intact!
         setIsScanning(false);
         return;
       }
@@ -192,7 +218,11 @@ export function UploadModal({ open, onOpenChange, onAnalysisComplete }: UploadMo
     } catch (err: unknown) {
       const error = err as Error;
       setIsScanning(false);
-      setErrorMessage(error.message || "Network error occurred while calling the analysis API.");
+      setErrorType("NETWORK_ERROR");
+      setErrorMessage(
+        "Network connection issue while communicating with the analysis server. Your inputs have been saved. Please try again."
+      );
+      setErrorDetails(error.message);
     }
   };
 
@@ -200,7 +230,7 @@ export function UploadModal({ open, onOpenChange, onAnalysisComplete }: UploadMo
     <Dialog
       open={open}
       onOpenChange={(newOpen) => {
-        if (!newOpen) handleReset();
+        // Preserve user inputs if they dismiss or toggle the modal
         onOpenChange(newOpen);
       }}
     >
@@ -224,16 +254,43 @@ export function UploadModal({ open, onOpenChange, onAnalysisComplete }: UploadMo
           </DialogDescription>
         </DialogHeader>
 
-        {/* Configuration Error Alert */}
+        {/* Configuration / Overload Error Alert */}
         {errorMessage && (
-          <Alert variant="destructive" className="my-2">
+          <Alert variant={errorType === "AI_SERVICE_OVERLOADED" ? "warning" : "destructive"} className="my-2">
             <ShieldAlert className="h-4 w-4" />
-            <AlertTitle className="font-semibold">Configuration Notice</AlertTitle>
-            <AlertDescription className="text-xs space-y-1.5 mt-1">
+            <AlertTitle className="font-semibold flex items-center justify-between">
+              <span>
+                {errorType === "AI_SERVICE_OVERLOADED"
+                  ? "AI Service Temporarily Busy"
+                  : errorType === "RATE_LIMIT_EXCEEDED"
+                  ? "Rate Limit Notice"
+                  : errorType === "GEMINI_API_KEY_MISSING"
+                  ? "Configuration Notice"
+                  : "Analysis Notice"}
+              </span>
+              <span className="text-[10px] font-mono font-normal text-muted-foreground">
+                Inputs Preserved
+              </span>
+            </AlertTitle>
+            <AlertDescription className="text-xs space-y-2 mt-1">
               <p>{errorMessage}</p>
               {errorDetails && (
                 <div className="p-2 bg-destructive-muted/80 rounded border border-destructive-border font-mono text-[11px] text-destructive-foreground">
                   {errorDetails}
+                </div>
+              )}
+              {errorType === "AI_SERVICE_OVERLOADED" && (
+                <div className="pt-1 flex items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="primary"
+                    size="sm"
+                    onClick={handleRunScan}
+                    disabled={isScanning}
+                    leftIcon={<RefreshCw className="h-3.5 w-3.5" />}
+                  >
+                    Try Again Now
+                  </Button>
                 </div>
               )}
             </AlertDescription>
@@ -556,9 +613,9 @@ export function UploadModal({ open, onOpenChange, onAnalysisComplete }: UploadMo
                   jobDescription.trim().length < 30
                 }
                 isLoading={isScanning}
-                leftIcon={<Sparkles className="h-4 w-4" />}
+                leftIcon={errorMessage ? <RefreshCw className="h-4 w-4" /> : <Sparkles className="h-4 w-4" />}
               >
-                {isScanning ? (scanStep || "Analyzing...") : "Run Match Analysis"}
+                {isScanning ? (scanStep || "Analyzing...") : errorMessage ? "Retry Analysis" : "Run Match Analysis"}
               </Button>
             </>
           ) : (

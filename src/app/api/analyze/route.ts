@@ -130,11 +130,69 @@ export async function POST(req: NextRequest) {
     });
   } catch (error: unknown) {
     const err = error as Error;
-    console.error("[POST /api/analyze Error]:", err);
+    const rawMessage = err.message || "";
+    console.error("[POST /api/analyze Error]:", rawMessage);
+
+    // Differentiate transient overload / rate limits / auth issues
+    const isOverload =
+      rawMessage.includes("503") ||
+      rawMessage.toLowerCase().includes("overloaded") ||
+      rawMessage.toLowerCase().includes("high demand") ||
+      rawMessage.toLowerCase().includes("service unavailable");
+
+    const isRateLimit =
+      rawMessage.includes("429") ||
+      rawMessage.toLowerCase().includes("rate limit") ||
+      rawMessage.toLowerCase().includes("resource exhausted");
+
+    const isAuth =
+      rawMessage.toLowerCase().includes("authentication failed") ||
+      rawMessage.includes("401") ||
+      rawMessage.includes("403");
+
+    if (isOverload) {
+      return NextResponse.json(
+        {
+          error: "AI_SERVICE_OVERLOADED",
+          message:
+            "The Gemini AI service is currently experiencing high demand. Automatic retries and model fallbacks were attempted, but the service is temporarily busy. Your inputs are preserved — please wait a moment and try again.",
+          isTransient: true,
+        },
+        { status: 503 }
+      );
+    }
+
+    if (isRateLimit) {
+      return NextResponse.json(
+        {
+          error: "RATE_LIMIT_EXCEEDED",
+          message:
+            "Gemini API request limit reached. Automatic retries were attempted. Please wait a moment before trying again.",
+          isTransient: true,
+        },
+        { status: 429 }
+      );
+    }
+
+    if (isAuth) {
+      return NextResponse.json(
+        {
+          error: "GEMINI_AUTH_FAILED",
+          message:
+            "Gemini API authentication failed. Please check that your GEMINI_API_KEY in .env.local is valid and active.",
+          instructions:
+            "Verify your API key at https://aistudio.google.com and ensure GEMINI_API_KEY is correctly set in .env.local.",
+        },
+        { status: 401 }
+      );
+    }
+
     return NextResponse.json(
       {
         error: "ANALYSIS_FAILED",
-        message: err.message || "An unexpected error occurred during resume analysis.",
+        message:
+          "Unable to complete live resume analysis. Please verify your inputs and try again.",
+        details: process.env.NODE_ENV === "development" ? rawMessage : undefined,
       },
       { status: 500 }
     );
