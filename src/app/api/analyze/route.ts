@@ -4,7 +4,13 @@ import { analyzeWithGemini } from "@/lib/gemini";
 import { AnalysisResult } from "@/lib/types/analysis";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 60; // Allow sufficient time for AI generation
+// 15 seconds is the maximum supported duration for Serverless Functions on Vercel Hobby plan
+export const maxDuration = 15;
+
+const JSON_HEADERS = {
+  "Content-Type": "application/json",
+  "Cache-Control": "no-store, no-cache, must-revalidate",
+};
 
 /**
  * POST /api/analyze
@@ -38,7 +44,7 @@ export async function POST(req: NextRequest) {
         if (file.size > 10 * 1024 * 1024) {
           return NextResponse.json(
             { error: "FILE_TOO_LARGE", message: "File exceeds 10MB limit." },
-            { status: 400 }
+            { status: 400, headers: JSON_HEADERS }
           );
         }
 
@@ -56,7 +62,7 @@ export async function POST(req: NextRequest) {
               error: "PARSING_FAILED",
               message: `Could not extract text from "${file.name}": ${err.message}`,
             },
-            { status: 422 }
+            { status: 422, headers: JSON_HEADERS }
           );
         }
       } else if (textParam) {
@@ -79,7 +85,7 @@ export async function POST(req: NextRequest) {
           message:
             "Please upload a readable resume document (.pdf, .docx, .txt) or paste your resume text (minimum 50 characters).",
         },
-        { status: 400 }
+        { status: 400, headers: JSON_HEADERS }
       );
     }
 
@@ -90,7 +96,7 @@ export async function POST(req: NextRequest) {
           message:
             "Please provide the target job description or requirements (minimum 30 characters).",
         },
-        { status: 400 }
+        { status: 400, headers: JSON_HEADERS }
       );
     }
 
@@ -101,11 +107,11 @@ export async function POST(req: NextRequest) {
         {
           error: "GEMINI_API_KEY_MISSING",
           message:
-            "GEMINI_API_KEY is not configured in the server environment. Please add your GEMINI_API_KEY to .env.local to perform real Gemini AI resume analysis.",
+            "GEMINI_API_KEY is not configured in the server environment. If running locally, add it to .env.local. If deployed on Vercel, configure it in Vercel Project Settings > Environment Variables.",
           instructions:
-            "Add `GEMINI_API_KEY=your_key_here` to .env.local in the project root, then restart the application.",
+            "In Vercel: Go to your Project Dashboard -> Settings -> Environment Variables. Add GEMINI_API_KEY with your Google AI Studio API key, ensure 'Production' is checked, then Redeploy.",
         },
-        { status: 503 }
+        { status: 503, headers: JSON_HEADERS }
       );
     }
 
@@ -119,15 +125,18 @@ export async function POST(req: NextRequest) {
       }
     );
 
-    return NextResponse.json({
-      success: true,
-      data: analysis,
-      metadata: {
-        filename,
-        resumeWordCount: resumeText.split(/\s+/).length,
-        promptVersion,
+    return NextResponse.json(
+      {
+        success: true,
+        data: analysis,
+        metadata: {
+          filename,
+          resumeWordCount: resumeText.split(/\s+/).length,
+          promptVersion,
+        },
       },
-    });
+      { status: 200, headers: JSON_HEADERS }
+    );
   } catch (error: unknown) {
     const err = error as Error;
     const rawMessage = err.message || "";
@@ -138,7 +147,9 @@ export async function POST(req: NextRequest) {
       rawMessage.includes("503") ||
       rawMessage.toLowerCase().includes("overloaded") ||
       rawMessage.toLowerCase().includes("high demand") ||
-      rawMessage.toLowerCase().includes("service unavailable");
+      rawMessage.toLowerCase().includes("service unavailable") ||
+      rawMessage.toLowerCase().includes("timed out") ||
+      rawMessage.toLowerCase().includes("timeout");
 
     const isRateLimit =
       rawMessage.includes("429") ||
@@ -158,7 +169,7 @@ export async function POST(req: NextRequest) {
             "The Gemini AI service is currently experiencing high demand. Automatic retries and model fallbacks were attempted, but the service is temporarily busy. Your inputs are preserved — please wait a moment and try again.",
           isTransient: true,
         },
-        { status: 503 }
+        { status: 503, headers: JSON_HEADERS }
       );
     }
 
@@ -170,7 +181,7 @@ export async function POST(req: NextRequest) {
             "Gemini API request limit reached. Automatic retries were attempted. Please wait a moment before trying again.",
           isTransient: true,
         },
-        { status: 429 }
+        { status: 429, headers: JSON_HEADERS }
       );
     }
 
@@ -179,11 +190,11 @@ export async function POST(req: NextRequest) {
         {
           error: "GEMINI_AUTH_FAILED",
           message:
-            "Gemini API authentication failed. Please check that your GEMINI_API_KEY in .env.local is valid and active.",
+            "Gemini API authentication failed. Please check that your GEMINI_API_KEY in Vercel Environment Variables or .env.local is valid and active.",
           instructions:
-            "Verify your API key at https://aistudio.google.com and ensure GEMINI_API_KEY is correctly set in .env.local.",
+            "Verify your API key at https://aistudio.google.com and ensure GEMINI_API_KEY is correctly set in your deployment environment.",
         },
-        { status: 401 }
+        { status: 401, headers: JSON_HEADERS }
       );
     }
 
@@ -194,7 +205,7 @@ export async function POST(req: NextRequest) {
           "Unable to complete live resume analysis. Please verify your inputs and try again.",
         details: process.env.NODE_ENV === "development" ? rawMessage : undefined,
       },
-      { status: 500 }
+      { status: 500, headers: JSON_HEADERS }
     );
   }
 }

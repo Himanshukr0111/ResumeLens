@@ -148,66 +148,146 @@ export function UploadModal({ open, onOpenChange, onAnalysisComplete }: UploadMo
     try {
       let response: Response;
 
-      if (inputMode === "file" && selectedFile) {
-        setScanStep("Uploading document to secure server parser...");
-        const formData = new FormData();
-        formData.append("file", selectedFile);
-        formData.append("jobDescription", jobDescription);
-        formData.append("targetRole", targetRole);
-        formData.append("promptVersion", promptVersion);
+      try {
+        if (inputMode === "file" && selectedFile) {
+          setScanStep("Uploading document to secure server parser...");
+          const formData = new FormData();
+          formData.append("file", selectedFile);
+          formData.append("jobDescription", jobDescription);
+          formData.append("targetRole", targetRole);
+          formData.append("promptVersion", promptVersion);
 
-        response = await fetch("/api/analyze", {
-          method: "POST",
-          body: formData,
-        });
-      } else {
-        setScanStep("Sending resume text to Gemini AI analysis engine...");
-        response = await fetch("/api/analyze", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            resumeText: pastedResumeText,
-            jobDescription,
-            targetRole,
-            promptVersion,
-          }),
-        });
+          response = await fetch("/api/analyze", {
+            method: "POST",
+            body: formData,
+          });
+        } else {
+          setScanStep("Sending resume text to Gemini AI analysis engine...");
+          response = await fetch("/api/analyze", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              resumeText: pastedResumeText,
+              jobDescription,
+              targetRole,
+              promptVersion,
+            }),
+          });
+        }
+      } catch (fetchErr: unknown) {
+        // Genuine network transport failure (e.g. client offline, connection dropped)
+        const error = fetchErr as Error;
+        setIsScanning(false);
+        setErrorType("NETWORK_ERROR");
+        setErrorMessage(
+          "Unable to reach the analysis server. Please check your internet connection and try again."
+        );
+        setErrorDetails(error.message);
+        return;
       }
 
       setScanStep("Evaluating skills, alignment, and evidence with Gemini AI...");
 
-      const payload = await response.json();
+      // Safely parse response body — handle both JSON and non-JSON (e.g. Vercel 504/413/500 HTML)
+      let payload: any = null;
+      let rawText = "";
+
+      const contentType = response.headers.get("content-type") || "";
+      if (contentType.includes("application/json")) {
+        try {
+          payload = await response.json();
+        } catch {
+          payload = null;
+        }
+      } else {
+        try {
+          rawText = await response.text();
+          // Attempt JSON parse in case Content-Type header was omitted
+          payload = JSON.parse(rawText);
+        } catch {
+          payload = null;
+        }
+      }
 
       if (!response.ok) {
-        setErrorType(payload.error || "ANALYSIS_FAILED");
-        if (payload.error === "GEMINI_API_KEY_MISSING") {
-          setErrorMessage(
-            "GEMINI_API_KEY is not configured in the server environment. Please set GEMINI_API_KEY in your .env.local file to perform real Gemini AI analysis."
-          );
-          setErrorDetails(
-            payload.instructions ||
-              "Add GEMINI_API_KEY=your_key_here to .env.local in the project root, then restart the application."
-          );
-        } else if (payload.error === "AI_SERVICE_OVERLOADED") {
-          setErrorMessage(
-            "Google Gemini AI is currently experiencing high demand. We attempted automatic retries and model fallbacks, but the service is temporarily busy. Your uploaded resume and job criteria are saved — please click 'Try Again' in a moment."
-          );
-          setErrorDetails(null);
-        } else if (payload.error === "RATE_LIMIT_EXCEEDED") {
-          setErrorMessage(
-            "Gemini API rate limit reached. Your inputs are preserved. Please wait a moment and click 'Try Again'."
-          );
-          setErrorDetails(null);
-        } else {
-          setErrorMessage(payload.message || "Failed to analyze resume.");
-          setErrorDetails(payload.details || null);
-        }
-        // Notice: selectedFile and pastedResumeText remain completely intact!
         setIsScanning(false);
+
+        // If the server returned a structured JSON error response
+        if (payload && (payload.error || payload.message)) {
+          setErrorType(payload.error || "ANALYSIS_FAILED");
+
+          if (payload.error === "GEMINI_API_KEY_MISSING") {
+            setErrorMessage(
+              "Gemini API key is not configured in the server environment."
+            );
+            setErrorDetails(
+              payload.instructions ||
+                "In Vercel: Go to Project Dashboard > Settings > Environment Variables. Add GEMINI_API_KEY with your Google AI Studio API key, ensure 'Production' is checked, then Redeploy."
+            );
+          } else if (payload.error === "AI_SERVICE_OVERLOADED") {
+            setErrorMessage(
+              payload.message ||
+                "Google Gemini AI is currently experiencing high demand. Automatic retries were attempted, but the service is temporarily busy. Your inputs are preserved — please click 'Try Again Now'."
+            );
+            setErrorDetails(null);
+          } else if (payload.error === "RATE_LIMIT_EXCEEDED") {
+            setErrorMessage(
+              payload.message ||
+                "Gemini API rate limit reached. Your inputs are preserved. Please wait a moment and click 'Try Again Now'."
+            );
+            setErrorDetails(null);
+          } else if (payload.error === "GEMINI_AUTH_FAILED") {
+            setErrorMessage(
+              "Gemini API authentication failed. The configured GEMINI_API_KEY is invalid or revoked."
+            );
+            setErrorDetails(
+              payload.instructions ||
+                "Verify your key at https://aistudio.google.com and update GEMINI_API_KEY in Vercel Environment Variables."
+            );
+          } else {
+            setErrorMessage(payload.message || "Failed to analyze resume.");
+            setErrorDetails(payload.details || payload.error || null);
+          }
+          return;
+        }
+
+        // If the server returned a non-JSON status code (e.g. Vercel 504 Gateway Timeout, 413, 502)
+        if (response.status === 504) {
+          setErrorType("AI_SERVICE_OVERLOADED");
+          setErrorMessage(
+            "The analysis request timed out on the server (Vercel 504 Gateway Timeout). The AI model took longer to respond than the serverless execution limit. Your resume and job inputs are preserved — please click 'Try Again Now'."
+          );
+          setErrorDetails("Serverless execution timeout (504). Click Try Again Now to re-run.");
+        } else if (response.status === 413) {
+          setErrorType("PAYLOAD_TOO_LARGE");
+          setErrorMessage(
+            "The uploaded file exceeds the deployment upload limit (4.5MB). Please upload a smaller document or paste your resume text directly."
+          );
+          setErrorDetails("HTTP 413 Request Entity Too Large");
+        } else if (response.status === 502 || response.status === 503) {
+          setErrorType("AI_SERVICE_OVERLOADED");
+          setErrorMessage(
+            `The analysis server is temporarily unavailable (HTTP ${response.status}). Your inputs have been preserved. Please try again in a few moments.`
+          );
+          setErrorDetails(rawText ? rawText.slice(0, 150) : null);
+        } else {
+          setErrorType("SERVER_ERROR");
+          setErrorMessage(
+            `The analysis server returned an error (HTTP ${response.status}). Your inputs have been preserved. Please try again.`
+          );
+          setErrorDetails(rawText ? rawText.slice(0, 200) : "No error details returned by server.");
+        }
         return;
       }
 
       // Success
+      if (!payload || !payload.data) {
+        setIsScanning(false);
+        setErrorType("INVALID_RESPONSE");
+        setErrorMessage("Received an unexpected data format from the analysis server. Please try again.");
+        return;
+      }
+
       const result: AnalysisResult = payload.data;
       setAnalysisResult(result);
       setIsScanning(false);
@@ -218,9 +298,9 @@ export function UploadModal({ open, onOpenChange, onAnalysisComplete }: UploadMo
     } catch (err: unknown) {
       const error = err as Error;
       setIsScanning(false);
-      setErrorType("NETWORK_ERROR");
+      setErrorType("UNEXPECTED_ERROR");
       setErrorMessage(
-        "Network connection issue while communicating with the analysis server. Your inputs have been saved. Please try again."
+        "An unexpected error occurred during analysis. Your inputs have been preserved. Please try again."
       );
       setErrorDetails(error.message);
     }

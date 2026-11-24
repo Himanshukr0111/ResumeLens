@@ -167,16 +167,40 @@ export async function analyzeWithGemini(
   );
 
   const MAX_RETRIES_PER_MODEL = 3;
+  // Maximum execution budget for the entire analysis workflow to ensure we always
+  // return a clean JSON response within Vercel's serverless function time limit (15s).
+  const MAX_EXECUTION_BUDGET_MS = 12500;
+  const startTime = Date.now();
+
   let responseText = "";
   let successfulModel = preferredModel;
   let lastError: Error | null = null;
   let hadTransientOverload = false;
 
   for (const modelName of modelCandidates) {
+    if (Date.now() - startTime >= MAX_EXECUTION_BUDGET_MS) {
+      console.warn(
+        `[Gemini API] Reached serverless execution deadline (${Date.now() - startTime}ms). Stopping model fallback loop.`
+      );
+      break;
+    }
+
     let attempt = 0;
     let modelSuccess = false;
 
     while (attempt <= MAX_RETRIES_PER_MODEL) {
+      const elapsed = Date.now() - startTime;
+      if (elapsed >= MAX_EXECUTION_BUDGET_MS) {
+        console.warn(
+          `[Gemini API] Total time budget exceeded (${elapsed}ms). Breaking retry loop.`
+        );
+        break;
+      }
+
+      // Calculate adaptive per-request timeout: between 4s and 8s based on remaining budget
+      const remainingTime = MAX_EXECUTION_BUDGET_MS - elapsed;
+      const callTimeout = Math.max(4000, Math.min(8000, remainingTime - 500));
+
       try {
         const model = genAI.getGenerativeModel({
           model: modelName,
@@ -187,8 +211,8 @@ export async function analyzeWithGemini(
           },
         });
 
-        // Enforce a 25-second timeout per call so individual attempts never hang indefinitely
-        const response = await model.generateContent(userPrompt, { timeout: 25000 });
+        // Enforce adaptive timeout per call so individual attempts never block the serverless budget
+        const response = await model.generateContent(userPrompt, { timeout: callTimeout });
         const text = response.response.text();
 
         if (text && text.trim().length > 0) {
@@ -237,11 +261,12 @@ export async function analyzeWithGemini(
 
         attempt++;
 
-        if (attempt <= MAX_RETRIES_PER_MODEL && isTransient) {
-          // Exponential backoff with jitter: 1s, 2s, 4s (+ 100-400ms jitter)
-          const baseBackoff = 1000 * Math.pow(2, attempt - 1);
-          const jitter = Math.floor(Math.random() * 300) + 100;
-          const waitMs = Math.min(baseBackoff + jitter, 6000);
+        const currentElapsed = Date.now() - startTime;
+        if (attempt <= MAX_RETRIES_PER_MODEL && isTransient && currentElapsed < MAX_EXECUTION_BUDGET_MS - 2000) {
+          // Fast exponential backoff with jitter: ~500ms, ~1000ms, ~1800ms
+          const baseBackoff = 500 * Math.pow(2, attempt - 1);
+          const jitter = Math.floor(Math.random() * 200) + 50;
+          const waitMs = Math.min(baseBackoff + jitter, 2500);
 
           console.warn(
             `[Gemini API] Model ${modelName} temporary error on attempt ${attempt}/${MAX_RETRIES_PER_MODEL} (${lastError.message}). Retrying in ${waitMs}ms...`
